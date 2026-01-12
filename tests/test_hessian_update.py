@@ -43,5 +43,3 @@ def test_update_H(dim, subdim, method, symm, pd):
         B4 = update_H(B, S.ravel() / 1e12, Y.ravel() / 1e12, method=method,
                       symm=symm)
         np.testing.assert_allclose(B, B4, atol=0, rtol=0)
-
-#TESTING GIT STRUCTURE!!!
