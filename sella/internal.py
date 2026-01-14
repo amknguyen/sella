@@ -25,6 +25,14 @@ from sella.linalg import (
     SparseInternalJacobian, SparseInternalHessian, SparseInternalHessians
 )
 
+"""
+    cell: the unit representation of the space of atoms
+    ncvecs: the number of cell vectors, in shape (N - 1, 3)
+    tvecs: the actual translation vectors required to shift an atom to 'see' another atom
+        tvecs = ncvecs @ (or dot product, they are the same) cell 
+"""
+
+
 IVec = Tuple[int, int, int]
 
 class NoValidInternalError(ValueError):
@@ -96,13 +104,13 @@ class Coordinate:
         raise NotImplementedError
 
     def calc(self, atoms: Atoms) -> float:
-        return self._eval0(atoms[self.indices].positions, **self.kwargs)
+        return self._eval0(atoms.positions[self.indices], **self.kwargs)
 
     def calc_gradient(self, atoms: Atoms) -> jnp.ndarray:
-        return self._eval1(atoms[self.indices].positions, **self.kwargs)
+        return self._eval1(atoms.positions[self.indices], **self.kwargs)
 
     def calc_hessian(self, atoms: Atoms) -> jnp.ndarray:
-        return self._eval2(atoms[self.indices].positions, **self.kwargs)
+        return self._eval2(atoms.positions[self.indices], **self.kwargs)
 
     def _check_derivative(
             self, atoms: Atoms, delta: float, atol: float, order: int
@@ -169,8 +177,24 @@ class Internal(Coordinate):
                 )
             ncvecs = np.empty((0, 3), dtype=np.int32)
         self.kwargs['ncvecs'] = ncvecs
-
         self._ncvecs_jax = jnp.array(ncvecs, dtype=jnp.float64)
+
+        self._cached_cell = None
+        self._cached_tvecs = None
+
+    def _get_cached_tvecs(self, cell: jnp.ndarray) -> jnp.ndarray :
+        """
+        If our current cell is the same as the cached cell, then our tvecs must be the same; no need to do
+        another matrix multiply, so just return cached tvecs for hessian / jacobian calculation.
+        """
+
+        if self._cached_cell is not None and self._cached_tvecs is not None:
+            if jnp.array_equal(self._cached_cell, cell):
+                return self._cached_tvecs
+        else:
+            self._cached_cell = cell.copy()
+            self._cached_tvecs = jnp.dot(self._ncvecs_jax, self._cached_cell)
+            return self._cached_tvecs
 
     @staticmethod
     def _make_vectorized_kernels(eval1, eval2):
@@ -263,18 +287,18 @@ class Internal(Coordinate):
 
     def calc(self, atoms: Atoms, tvecs: Optional[np.ndarray] = None) -> jnp.ndarray:
         if tvecs is None:
-            tvecs = jnp.dot(self._ncvecs_jax, atoms.cell.array)
-        return self._eval0(atoms[self.indices].positions, tvecs)
+            tvecs = self._get_cached_tvecs(atoms.cell.array)
+        return self._eval0(atoms.positions[self.indices], tvecs)
 
     def calc_gradient(self, atoms: Atoms, tvecs: Optional[np.ndarray] = None) -> jnp.ndarray:
         if tvecs is None:
-            tvecs = jnp.dot(self._ncvecs_jax, atoms.cell.array)
+            tvecs = self._get_cached_tvecs(atoms.cell.array)
         pos_subset = atoms.positions[self.indices]
         return self._eval1(pos_subset, tvecs)
 
     def calc_hessian(self, atoms: Atoms, tvecs: Optional[np.ndarray] = None) -> jnp.ndarray:
         if tvecs is None:
-            tvecs = jnp.dot(self._ncvecs_jax, atoms.cell.array)
+            tvecs = self._get_cached_tvecs(atoms.cell.array)
         pos_subset = atoms.positions[self.indices]
         return self._eval2(pos_subset, tvecs)
 
@@ -981,7 +1005,7 @@ class BaseInternals:
                 new_indices = (*rot.indices[:-1], didx)
                 new_rot = Rotation(
                     new_indices, rot.axis,
-                    self.all_atoms[new_indices].positions
+                    self.all_atoms.positions[new_indices]
                 )
                 self.internals['rotations'][i] = new_rot
 
@@ -1096,7 +1120,7 @@ class Constraints(BaseInternals):
             new = Rotation(
                 indices,
                 axis,
-                self.all_atoms[indices].positions
+                self.all_atoms.positions[indices]
             )
         try:
             _ = self.internals['rotations'].index(new)
@@ -1358,7 +1382,7 @@ class Internals(BaseInternals):
             new = Rotation(
                 indices,
                 axis,
-                self.all_atoms[indices].positions
+                self.all_atoms.positions[indices]
             )
         if (
                 new in self.internals['rotations']
