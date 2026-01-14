@@ -15,6 +15,7 @@ water.set_distance(0, 2, rOH)
 water.set_angle(1, 0, 2, angleHOH)
 a = 3.106162559099496
 rng = np.random.RandomState(0)
+rattle_strength = 0.01
 
 atoms_ref = Atoms()
 for offsets in product(*((0, 1),) * 3):
@@ -24,6 +25,20 @@ for offsets in product(*((0, 1),) * 3):
     atoms.positions += a * np.asarray(offsets)
     atoms_ref += atoms
 
+def safe_rattle(input_atom, reference_atom, input_rng):
+    max_attempts = 100
+    for attempt in range(max_attempts):
+        input_atom.rattle(rattle_strength, input_rng)
+
+        energy = input_atom.get_potential_energy()
+        forces = input_atom.get_forces()
+
+        if np.isfinite(energy).all() and np.isfinite(forces).all():
+            return input_atom
+        else:
+            input_atom.set_positions(reference_atom)
+
+    raise RuntimeError('Failed to rattle!')
 
 @pytest.mark.parametrize("internal,order",
                          [(True, 0),
@@ -32,13 +47,10 @@ for offsets in product(*((0, 1),) * 3):
                           (False, 1),
                           ])
 def test_water_dimer(internal, order):
-    internal = True
-    order = 0
-    rng = np.random.RandomState(1)
-
     atoms = atoms_ref.copy()
     atoms.calc = TIP3P()
-    atoms.rattle(0.01, rng=rng)
+
+    safe_rattle(atoms, atoms_ref, 1)
 
     nwater = len(atoms) // 3
     cons = Constraints(atoms)
@@ -75,7 +87,9 @@ def test_water_dimer(internal, order):
     opt.run(fmax=1e-3)
     print("First run done")
 
-    atoms.rattle()
+    current_atom = atoms.copy()
+    safe_rattle(atoms, current_atom, 1)
+
     opt.run(fmax=1e-3)
 
     Ufree = opt.pes.get_Ufree()
