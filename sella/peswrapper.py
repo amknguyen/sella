@@ -8,7 +8,6 @@ from ase.utils import basestring
 from ase.visualize import view
 from ase.calculators.singlepoint import SinglePointCalculator
 from ase.io.trajectory import Trajectory
-
 from sella.utilities.math import modified_gram_schmidt
 from sella.hessian_update import symmetrize_Y
 from sella.linalg import NumericalHessian, ApproximateHessian
@@ -435,10 +434,18 @@ class InternalPES(PES):
         dx = target - self.get_x()
 
         t0 = 0.
+        self.bad_int = self.int.check_for_bad_internals()
+        if self.bad_int is not None:
+            raise RuntimeError('Bad Internals!')
+
         Binv = np.linalg.pinv(self.int.jacobian())
         y0 = np.hstack((self.apos.ravel(), self.dpos.ravel(),
                         Binv @ dx,
                         Binv @ self.curr.get('g', np.zeros_like(dx))))
+
+        if not np.isfinite(y0).all():
+            raise RuntimeError('y0 is not finite!')
+
         ode = LSODA(self._q_ode, t0, y0, t_bound=1., atol=1e-6)
 
         while ode.status == 'running':
